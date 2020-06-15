@@ -1,0 +1,616 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Re-run extract extracting region data.
+
+
+```{r setup}
+knitr::opts_knit$set(root.dir = rprojroot::find_rstudio_root_file())
+knitr::opts_chunk$set(cache=TRUE)
+```
+
+# Choose what parts to rerun
+Choose parts to run adn number of iterations.
+
+```{r choose_parts_run}
+extract_stata_files <- FALSE
+clean_and_merge <- TRUE
+run_imputation <- TRUE
+aggregate_data <- TRUE
+num_iters <- 20000
+```
+
+
+# Functions and foldernames
+
+```{r read_data}
+library (foreign)
+
+## Only runs if set convert.factors to FALSE, files otherwise too big 
+
+## Functions
+# read and select vars function for a specific file
+ReadAndSelect <- function (x, myvars ){
+  a <- read.dta(paste("../Data_unzipped/Data_SSEASI/", x, sep = "/"), convert.factors = FALSE, convert.dates = FALSE)
+  a <- a [ , names(a) %in% myvars]
+  a$ctr.type.2digit <- paste (substr(x,1,2), substr(x, 5,6), sep = "_")
+#  a$missing.vars <- paste (setdiff(myvars, names(a)), collapse = ", ")
+#  a [,setdiff(myvars, names(a))] <- NA
+#  Convert factors to character vectors
+#  identifyfactors <- sapply(a, class) == "factor"
+#  a [, identifyfactors] <- lapply (a [, identifyfactors], as.character)
+  a
+}
+
+# Read all files and save in a list
+ReadAllFiles <- function (filetype, varlist){
+  filenames <- substr(filetype, 1, 8)
+  listdata <- list()
+  listvars <- list()
+  for (i in 1:length (filetype)){
+    assign(filenames[i], ReadAndSelect (filetype[i], varlist))
+    listdata[[i]] <- get(filenames[i])
+    # save (list = filenames[i], file = paste (write, filenames[i], ".Rdata", sep = ""))
+    listvars[[i]] <- varlist %in% names(get(filenames[i]))
+    names(listvars[[i]]) <- varlist
+    rm (list = filenames[i])
+  }
+  names(listdata) <- filetype
+  names(listvars) <- filetype
+  list (listvars, listdata)
+}
+
+folder <- "india"
+names(folder) <- "india"
+
+```
+
+# REad files
+```{r read_files}
+if (extract_stata_files == TRUE){
+  # list files in folder for India
+  # "../Data_unzipped/Data_SSEASI/"
+  allfiles <- tolower(list.files("../Data_unzipped/Data_SSEASI/", pattern = "^IA"))
+  
+  # select only .dta files
+  allfiles <- allfiles [substr(allfiles, 10,12) == "dta"]
+  
+  table(stringr::str_sub(allfiles, 3,4))
+  ## Women variables want
+  # select all KR datasets for all DHS
+  irvars <- c("ctr.type.2digit", "v001", # My and DHS country code
+              "v000", "v002", "v003", # cluster number, household number, respondent line number
+              "v763a", "v857") # STD data
+  
+  ir <- allfiles [substr(allfiles, 3,4) == "ir"]
+  ir.files <- ReadAllFiles(ir, irvars)
+  save(ir.files, file = paste0(names(folder), "/irfiles.Rdata"))  
+  rm(ir.files)
+  
+  ## "kid" recode variables want
+  krvars <- c("ctr.type.2digit","v001", # my country and type, DHS country code
+              "v000", "v002", "v003", # cluster number, household number, respondent line number
+              "bidx", # Birth index
+              "v005", # sample weight
+              "v006", "v007", "v008", # month and year of interview and century month
+              "b3", # century month for date of birth of child
+              "m19", # weight of child at birth (m18 subjective)
+              "h3", # "h3d", "h3m", "h3y", # immunisation
+              "h5", # "h5d", "h5m", "h5y", # immunisation
+              "h7", # "h7d", "h7m", "h7y", # immunisation
+              "h9", # "h9d", "h9m", "h9y", # immunisation
+              "v404", "m39", # breastfeeding,
+              "hw8", # weight/age standard deviation (original, found in earlier DHS)
+              "hw71") # Weight/Age standard deviation (new WHO) 
+  
+  # Identify data files # select all KR datasets for all DHS
+  kr <- allfiles [substr(allfiles, 3,4) == "kr"]
+  
+  # Read in all KR6 data files and label according to first 8 characters of name - as per DHS coding, select variables want t keep
+  # and save in .Rdata format
+  kr.files <- ReadAllFiles(kr, krvars)
+  save(kr.files, file = paste0(names(folder), "/krfiles.Rdata"))  
+  rm(kr.files)
+  
+  ## Household data
+  hrvars <- c("ctr.type.2digit", # my country and type
+              "hv000", "hv001", "hv002",  # country code, cluster code, household number
+              "hv024", # State code
+              "hv006", # Month of interview
+              "hv007", # Year of interview 51 4 N I 1 0 No No
+              "hv008", # Date of interview (CMC)
+              "hv009", "hv216",  # Overcrowding
+              "hv226", "hv242", "hv241") # indoor air pollution
+  
+  hr <- allfiles [substr(allfiles, 3,4) == "hr"]
+  hr.files <- ReadAllFiles (hr, hrvars)
+  save(hr.files, file = paste(names(folder), "hrfiles.Rdata", sep = "/"))  
+  rm(hr.files)
+  
+  ## HIV data
+  hiv5 <- haven::read_dta("//cfsg01.campus.gla.ac.uk/SSD_Dept_Data_D/HAW/HAWPublic/PublicHealth/DMSBiolinnc/DHS/iaar51fl.dta")
+  hiv7 <- haven::read_dta("//cfsg01.campus.gla.ac.uk/SSD_Dept_Data_D/HAW/HAWPublic/PublicHealth/DMSBiolinnc/DHS/iaar71fl.dta")
+  
+  arvars <- c("hivclust","hivnumb", "hivline", # link variables
+              "hiv03") # hiv status
+  
+  hiv5 <- hiv5[ , arvars]
+  hiv7 <- hiv7[ , arvars]
+  hiv5$dhs <- 5
+  hiv7$dhs <- 7
+  
+  ar.files <- rbind(hiv5, hiv7)
+  rm(hiv5, hiv7)
+  
+  save(ar.files, file = "//cfsg01.campus.gla.ac.uk/SSD_Dept_Data_D/HAW/HAWPublic/PublicHealth/DMSBiolinnc/DHS/arfiles.Rdata")  
+}
+```
+
+# Combine files
+```{r combine_files}
+if(clean_and_merge  == TRUE){
+      
+    list.files("india")
+    library (plyr)
+    folder <- "india"
+    names(folder) <- "india"
+    ## HIV change to TRUE and FALSE
+    ## For DHS 5 and 6 use maternal HIV, use STD for earlier versions as proxy for HIV
+    load(file = "//cfsg01.campus.gla.ac.uk/SSD_Dept_Data_D/HAW/HAWPublic/PublicHealth/DMSBiolinnc/DHS/arfiles.Rdata")
+    ar.data <- ar.files
+    rm(ar.files)
+    # three unique values only and no missings. only 3 samples with indeterminate so drop
+    ar.data <- ar.data[!ar.data$hiv03 == 7,]
+    ar.data$hiv <- ar.data$hiv03
+    ar.data$hiv03 <- NULL
+    
+    load(file = paste(names(folder), "irfiles.Rdata", sep = "/"))
+    ir.data <- do.call(rbind.fill, ir.files[[2]])
+    rm(ir.files)
+    ir.data <- ir.data [!duplicated(paste(ir.data$ctr.type.2digit, ir.data$v001, ir.data$v002, ir.data$v003, sep = "_")), ]
+    
+    # STD variable changes so use either, if either is completely missing assign it to NA
+    if (is.null(ir.data$v857)) ir.data$v857 <- NA
+    if (is.null(ir.data$v763a)) ir.data$v763a <- NA
+    
+    ir.data [ , c("v763a", "v857")] <- lapply (ir.data [ , c("v763a", "v857")], function (x) ifelse(is.na(x), 99, x))
+    ir.data$hiv_proxy <- NA
+    ir.data$hiv_proxy [ ir.data$v763a ==0 | ir.data$v857 == 0] <- 0
+    ir.data$hiv_proxy [ ir.data$v763a ==1 | ir.data$v857 == 1] <- 1
+    ir.data <- ir.data [ , !names(ir.data) %in% c("v763a", "v857") ]
+    ir.data$dhs <- stringr::str_sub(ir.data$ctr.type.2digit, 4,4)
+    ir.data$v763a <- NULL
+    ir.data$v857 <- NULL
+    
+    ir.data <- merge(ir.data, ar.data, by.x = c("dhs","v001", "v002", "v003"),
+                        by.y = c("dhs","hivclust", "hivnumb", "hivline"),
+                        all.x = TRUE)
+    
+    ## Kid file
+    load(file = paste(names(folder), "krfiles.Rdata", sep = "/"))
+    kr.data <- do.call(rbind.fill, kr.files[[2]])
+    kr.data <- kr.data [!duplicated(paste(kr.data$ctr.type.2digit, kr.data$v001, kr.data$v002, kr.data$v003, kr.data$bidx, sep = "_")), ]
+    rm(kr.files)
+    
+    ## Merge maternal HIV onto kid file
+    kr.data <- merge(kr.data, ir.data, by = c("ctr.type.2digit", "v000", "v001", "v002", "v003"),
+                        all.x = TRUE)
+    rm(ir.data)
+    
+    # 1000*mean(kr.data$hiv, na.rm = TRUE)
+    # 1000*mean(kr.data$hiv_proxy, na.rm = TRUE)
+    
+    # 2. lbw - DHS 2 to 6
+    kr.data$lbw <- kr.data$m19 <= 2500
+    kr.data$lbw[kr.data$m19 >= 9000] <- NA
+    
+    # age in months
+    kr.data$age.in.months <- kr.data$v008 - kr.data$b3 # century month survey - century month child's age
+    
+    # 3. incomplete immunisation - DHS 1-6
+    # recode vaccination variable
+    # 0 No
+    # 1 Vaccination date on card
+    # 2 Reported by mother
+    # 3 Vaccination marked on card
+    # 8 Don't know
+    # (m) 9 Missing
+    kr.data [, c("dtp1", "dtp2", "dtp3", "measles")] <- 
+      lapply(kr.data [ , c("h3", "h5", "h7", "h9")], 
+             function (x) ifelse (x==9, NA, x %in% 1:3 ))#
+    kr.data$vac <- "complete" #  
+    kr.data$vac [ kr.data$age.in.months > (2+1) & kr.data$h3 == FALSE ] <- "incomplete"
+    kr.data$vac [ kr.data$age.in.months > (3+1) & kr.data$h5 == FALSE ] <- "incomplete"
+    kr.data$vac [ kr.data$age.in.months > (5+1) & kr.data$h7 == FALSE ] <- "incomplete"
+    kr.data$vac [ kr.data$age.in.months > (12+1) & kr.data$h9 == FALSE ] <- "incomplete"
+    kr.data$vac [ is.na(kr.data$dtp1) & is.na(kr.data$dtp2) & is.na(kr.data$dtp3) &
+                     is.na(kr.data$measles)] <- NA # set to missing if all data missing
+    kr.data$inc.imm <- ifelse(kr.data$vac == "incomplete", TRUE, FALSE)
+    
+    # 4 non-exclusive breastfeeding - Same coding from DHS 1 to DHS 6, M39 correct code
+    kr.data$ebf <- kr.data$v404
+    kr.data$ebf [ !is.na(kr.data$ebf) & kr.data$m39 !=0 ] <- 0  # any food other than breastmilk
+    kr.data$non.ebf <- ifelse(kr.data$ebf == 1, FALSE, TRUE)
+    kr.data$non.ebf [ kr.data$age.in.months >6 ] <- NA # set to NA if aged more than 6 months
+    # Later on will impute this
+    
+    ## DHS 1-4 for longitudinal use HW8 otherwise use HW71
+    # 5. Malnutrition HW71 Weight/Age standard deviation (new WHO) 98 4 N I 1 0 No No
+    # -600:500 9996 Height out of plausible limits 9997 Age in days out of plausible
+    # limits 9998 Flagged cases (m) 9999 Missing (na) Not applicable 
+    # http://www.who.int/bulletin/volumes/85/6/06-034421/en/ In our final sample for
+    # each DHS survey, we excluded children without data on height, weight, age or
+    # sex. We used the new cut-offs recommended by the WHO for data exclusion.5
+    # Thus, data were excluded if a child’s HAZ was below –6 or above +6, WAZ (eight for age SD)was
+    # below –6 or above +5, WHZ was below –5 or above +5, or BMIZ was below –5 or
+    # above +5, because these extreme values were most likely a result of errors in
+    # measurement or data entry.5
+    ## therefore hw71 has been multiplied by 100 to avoid decimal points in data storage
+    
+    kr.data$maln <- kr.data$hw71
+    kr.data$maln [ kr.data$maln >500 ] <- NA # set missing values
+    kr.data$maln <- ifelse (kr.data$maln < -200, TRUE, FALSE)
+    
+    kr.data$maln.long <- kr.data$hw8
+    kr.data$maln.long [ kr.data$maln.long >500 ] <- NA # set missing values
+    kr.data$maln.long <- ifelse (kr.data$maln.long < -200, TRUE, FALSE)
+    
+    kr.data <- kr.data [ , ! names(kr.data) %in% c("b3", "dtp1", "dtp2", "dtp3", "measles","h3", "h5", "h7", "h9", "vac","v404", "m39", "ebf")] 
+    save (kr.data, file = paste (names(folder), "kr_processed.Rdata", sep = "/"))
+    
+    ##Household variables
+    load(file = paste(names(folder), "hrfiles.Rdata", sep = "/"))
+    hr.data <- do.call(rbind.fill, hr.files[[2]])
+    hr.data <- unique(hr.data)
+    rm(hr.files)
+    
+    # 5 indoor air pollution - DHS 5 and 6 have all vars, DHS 4 has fuel type but not cooking location. DHS 1-3 has nil
+    # DHS 4 recode map
+    #* indicates potentially polluting
+    # HV226 46 2 0 N S Type of cooking fuel
+    # values: value label
+    # 1 Electricity
+    # 2 LPG, natural gas
+    # 3 Biogas
+    # 4 Kerosene *
+    # 5 Coal, lignite
+    # 6 Charcoal
+    # 7 Firewood, straw *
+    # 8 Dung *
+    # 96 Other
+    # 99 Missing value
+    # ranges: lower upper
+    # 1 8
+    # 96 96
+    ## DHS 5 and coding
+    # HV226 Type of cooking fuel 
+    # 1 Electricity
+    # 2 LPG
+    # 3 Natural gas
+    # 4 Biogas
+    # 5 Kerosene *
+    # 6 Coal, lignite
+    # 7 Charcoal
+    # 8 Wood *
+    # 9 Straw/shrubs/grass *
+    # 10 Agricultural crop *
+    # 11 Animal dung *
+    # 95 No food cooked in house
+    # 96 Other
+    # (m) 99 Missing
+    ## For longitudinal analysis including 4, 5 and 6 use indoor.air
+    hr.data$survey.type <- substr(hr.data$hv000,3,3)
+    hr.data$indoor.air <- (hr.data$hv226 %in% c(4,7,8) & hr.data$survey.type == 4) | 
+                          (hr.data$hv226 %in% c(5, 8, 9, 10, 11) & hr.data$survey.type %in% 5:6)
+    hr.data$indoor.air [(hr.data$hv226 == 99 & !is.na(hr.data$hv226)) | hr.data$survey.type %in% 1:3] <- NA
+    hr.data$indoor.air <- hr.data$indoor.air
+    
+    # HV242 Household has separate room used as kitchen 
+    # 0 No
+    # 1 Yes
+    # (m) 9 Missing
+    
+    ## For single time analysis use the  one which takes into account cooking location
+    # HV241 Food cooked in the house/ separate building
+    # 1 In the house
+    # 2 In a separate building
+    # 3 Outdoors
+    # 6 Other
+    # (m) 9 Missing
+    # (na) Not applicable
+    hr.data$indoor.air  [hr.data$hv242 %in% c(2,3,6) & !is.na(hr.data$hv242)] <- FALSE
+    
+    ## 6 Overcrowding - as per discussion >5 persons per household, more cople version commented out
+    # HV009 Number of household members 
+    # 0:90
+    # HV216 Number of rooms used for sleeping
+    # 0:24
+    # (m) 99 Missing
+    # hr.data$hv216 [ hr.data$hv216 == 99] <- NA
+    # hr.data$overcrowd <- (hr.data$hv009 / hr.data$hv216 ) > 3
+    hr.data$overcrowd <- hr.data$hv009  > 5
+    
+    ### 7 State
+    # head(hr.data$hv024)
+    hr.data <- hr.data [ , c("ctr.type.2digit" ,"hv000", "hv001", "hv002", "hv008", "hv024","indoor.air", "indoor.air", "overcrowd")]
+    
+    
+    save (hr.data, file = paste (names(folder), "hr_processed.Rdata", sep = "/"))
+    
+    final <- merge (kr.data, hr.data, 
+                    by.x = c("ctr.type.2digit", "v001", "v002"), # country, cluster, household, cent month
+                    by.y = c("ctr.type.2digit", "hv001", "hv002"),
+                    all.x = TRUE)
+    final <- final [ !duplicated(paste(final$ctr.type.2digit, final$v001, final$v002, final$v003, final$bidx, sep = "_")), ]
+    rm(hr.data, kr.data)
+    
+    ## We do not want age stratified analysis, only to exclude children aged over 4
+    ## (as per email from Harish July 2015) Want to assume that the proportion of
+    ## children aged 6 to 48 months who had non-EBF is the same as those who are
+    ## currently non-EBF within the other strata - so set variable to 2 if aged 6 months to 4 years
+    # apply the proportion wihtin the aggregation analysis
+    # at this stage set the non-ebf in children aged over 6 months to FALSE
+    
+    final$age <- 0
+    final$age [ final$age.in.months <= 6] <- 1
+    
+    final$age [  final$age.in.months >6 & final$age.in.months <= (4*12)] <- 2
+    final$non.ebf [ final$age == 2] <- FALSE
+    
+    ## Set non-ebf to NA, as will be imputing this later, assumes non-EBF same in other age groups
+    final$non.ebf [final$age != 1] <- NA
+      
+    
+                        # country, state, century month, age, weight, 
+    final <- final [ , c("ctr.type.2digit", "hv024","v008", "age", "v005", 
+                         "lbw", "hiv", "hiv_proxy", "inc.imm", "non.ebf", "maln", "maln.long", "indoor.air", "overcrowd")]
+    save (final, file = paste (names(folder), "final.Rdata", sep = "/"))
+}
+```
+# Impute missing variables
+Run multiple imputation with only one sample. Do a sensitivity anlaysis later with another imputed sample
+
+```{r impute}
+if(run_imputation == TRUE){
+  library(mice)
+  final_imp <- final[ , c("age", "lbw", "hiv", "hiv_proxy", "inc.imm", "non.ebf", "maln", "maln.long", "indoor.air", "overcrowd")]
+  final_imp$age <- final_imp$age - 1
+  final_imp[] <- lapply(final_imp, function(x) factor(as.numeric(x)))
+  
+  final_imp_done <- mice(final_imp, m = 1, method = "logreg")
+  saveRDS(final_imp_done, file = paste (names(folder), "final_imputed.Rdata", sep = "/"))
+  
+  final_imp_done <- readRDS(file = paste (names(folder), "final_imputed.Rdata", sep = "/"))
+  load(file = paste (names(folder), "final.Rdata", sep = "/"))
+  final_imp <- mice::complete(final_imp_done)
+  setdiff(names(final), names(final_imp))
+  
+  final_imp <- cbind(final[, c("ctr.type.2digit", "hv024", "v008", "v005", "age")],
+                     final_imp [ ,c("lbw", "hiv", "inc.imm", "non.ebf", 
+                                    "maln.long", "indoor.air", "overcrowd")])
+  saveRDS(final_imp, file = paste (names(folder), "final_imputed_merged.Rdata", sep = "/"))
+}
+
+```
+
+
+# Aggregate data
+
+```{r aggregate}
+if(aggregate_data == TRUE) {
+  final <- readRDS(file = paste (names(folder), "final_imputed_merged.Rdata", sep = "/"))
+  final$n <- 1
+    
+    # Load data table for fast aggregation
+  library (data.table)
+  final <- data.table (final)
+  final.agg <- final[, list(n=sum(as.numeric(n)), weight = sum(as.numeric(v005)), year =
+                              mean(as.numeric(v008))), by=list(ctr.type.2digit, hv024, age,
+                                                               lbw, hiv, inc.imm, 
+                                                               non.ebf, indoor.air, 
+                                                               overcrowd, maln.long)] 
+  
+  final.agg <- as.data.frame (final.agg)
+  final.agg$year <- 1900 + (final.agg$year -1)/12 
+  
+  # Convert all factors to numeric 01
+  final.agg[,c("lbw", "hiv", "inc.imm", "non.ebf", 
+                       "indoor.air", "overcrowd", "maln.long")] <- 
+    lapply(final.agg[,c("lbw", "hiv", "inc.imm", "non.ebf", 
+                        "indoor.air", "overcrowd", "maln.long")],
+                                    function(x) as.integer(as.character(x)))
+  
+  save (final.agg, file = paste (names(folder), "region aggregated data.Rdata", sep = "/"))
+  write.csv (final.agg, file = paste (names(folder), "region aggregated data.csv", sep = "/"), row.names = FALSE)
+}
+```
+
+# Calculate dirichlet 
+```{r dirlecht}
+library(MCMCpack)
+library(tidyverse)
+library(stringr)
+load("india/region aggregated data.Rdata")
+
+## Create survey variable
+final.agg <- final.agg %>% 
+  mutate(survey = str_sub(ctr.type.2digit, 4,5))
+
+## Add copy of dataset with all states together 
+# define whole of india as hv024 = 0
+all_india <- final.agg %>% 
+  group_by(ctr.type.2digit, survey,
+           age, lbw, hiv, inc.imm, non.ebf, indoor.air, overcrowd, maln.long) %>% 
+  summarise(n = sum(n), weight = sum(weight), year = mean(year)) %>% 
+  ungroup() %>% 
+  mutate(hv024 = 0)
+
+final.agg <- bind_rows(all_india, final.agg) %>%
+  mutate(survey_state = paste(survey, hv024, sep = "_"))
+
+surveys_states <- unique(final.agg$survey_state) %>%  sort()
+names(surveys_states) <- surveys_states
+
+## Combine and rewight Telangana (36) and Andra Pradesh(2) in 2015 (DHS 72)
+ap_tl <- final.agg %>% 
+  filter(survey_state %in% c("72_36", "72_2"), hv024 %in% c(2, 36)) %>% 
+  group_by(ctr.type.2digit, age, lbw, hiv, inc.imm, non.ebf, indoor.air, overcrowd, maln.long, survey) %>% 
+  summarise(n = sum(n), weight = sum(weight), year = mean(year)) %>% 
+  ungroup() %>% 
+  mutate(hv024 = 2, survey_state = "72_2")
+
+final.agg <- final.agg %>% 
+  filter(!(survey_state %in% c("72_36", "72_2") & hv024 %in% c(2, 36))) %>% 
+  bind_rows(ap_tl) %>% 
+  arrange(ctr.type.2digit, survey, hv024)
+
+## Reweight percentage to state by normalising the weights
+final.agg <- final.agg %>% 
+  group_by(ctr.type.2digit, hv024, survey, survey_state) %>% 
+  mutate(weight_norm = weight/sum(weight)) %>% 
+  ungroup()
+
+SampleStates <- function (chosen_survey, chosen_state, 
+                           chosen_rfs = c("lbw", "inc.imm", "non.ebf", "maln.long",
+                                          "overcrowd", "indoor.air", "hiv"),
+                           chosen_ages = 1:2,
+                          n_iter = num_iters){ # 
+  ## Samples from Dirlecht distribution for selected risk factors
+  ## Uses prior of 1 for all parameters (ie a uniform prior)
+
+    ## Create dataset of complete combinations
+  if(length(chosen_rfs) == 7)  state_complete <- expand.grid(0:1, 0:1, 0:1, 0:1, 0:1, 0:1, 0:1)
+  if(length(chosen_rfs) == 6)  state_complete <- expand.grid(0:1, 0:1, 0:1, 0:1, 0:1, 0:1)
+  if(length(chosen_rfs) == 5)  state_complete <- expand.grid(0:1, 0:1, 0:1, 0:1, 0:1)
+  names(state_complete) <- chosen_rfs
+
+  # Select relevant survey and state
+  selected_survey_state <- final.agg %>% 
+    filter(survey == chosen_survey, hv024 == chosen_state)
+  
+  ## Aggregate further as per ages, intially both age groups
+  dots <- sapply(chosen_rfs, . %>% {as.formula(paste0('~', .))})
+  state_count <- selected_survey_state %>% 
+    select(age, lbw, inc.imm, non.ebf, inc.imm, maln.long, indoor.air, overcrowd, hiv, n, weight_norm) %>% 
+    mutate_at(vars(-weight_norm), as.integer) %>% 
+    filter(age %in% chosen_ages) %>% 
+    group_by_(.dots = dots) %>% 
+    summarise(n = sum(n),
+              weight_norm = sum(weight_norm))
+  ## Combine with complete list of risk factors for n's and weights
+  state_count <- state_complete %>% 
+    left_join(state_count, by = chosen_rfs) %>% 
+    mutate(n = if_else(is.na(n), 0L, n),
+           weight_norm = if_else(is.na(weight_norm), 0, weight_norm))
+
+  ## Obtain samples with a prior of 1/128, ie assume same proportion in each category
+  smpls <- rdirichlet(n_iter, state_count$n + 1/128)
+  # Recalcualte proportions based on weights
+  # Shape weights into same format as Dirichlet
+  wt_mtrx <- t(state_count$weight_norm)
+  wt_mtrx <- wt_mtrx[rep(1,nrow(smpls)), ]
+  # Multiple weights and normalise so same proportions
+  smpls_new <- smpls * wt_mtrx
+  smpls_new <- smpls_new /rowSums(smpls_new)
+  ## Output samples and varlist
+  list(smpls = smpls_new, state_complete = state_complete)
+}
+# Select earliest and latest DHS surveys to include in analysis
+code_earliest <- 42
+code_latest <- 72
+
+## Estimate for DHS latest
+states_dhs_latest <- unique(final.agg$hv024[final.agg$survey == code_latest]) %>%  sort()
+names(states_dhs_latest) <- states_dhs_latest
+
+res_states_dhs_latest <- map(states_dhs_latest, ~ 
+                         SampleStates(chosen_survey = code_latest, chosen_state = .x,
+                                      chosen_rfs = c("lbw", "inc.imm", "non.ebf", "maln.long",
+                                          "overcrowd", "indoor.air", "hiv")))
+## Estimate for DHS 4
+states_dhs_earliest <- unique(final.agg$hv024[final.agg$survey == code_earliest]) %>%  sort()
+names(states_dhs_earliest) <- states_dhs_earliest
+
+res_states_dhs_earliest <- map(states_dhs_earliest, ~ 
+                         SampleStates(chosen_survey = code_earliest, chosen_state = .x,
+                                      chosen_rfs = c("lbw", "inc.imm", "non.ebf", "maln.long",
+                                          "overcrowd", "indoor.air", "hiv")))
+```
+
+# Transpose lists and extract
+```{r list_transpose}
+state_complete <- res_states_dhs_earliest$`0`[[2]]
+res_states_dhs_earliest <- transpose(res_states_dhs_earliest)
+res_states_dhs_earliest <- res_states_dhs_earliest[[1]]
+
+res_states_dhs_latest <- transpose(res_states_dhs_latest)
+res_states_dhs_latest <- res_states_dhs_latest[[1]]
+```
+
+
+
+# Convert HV
+FROM UNAIDS
+2000|53403|119369000
+2006|65678|118170000
+2013|46087|116176000
+
+Multiply HIV cases from UNAIDS by cases from all of india to get odds ratio, then apply to each row.
+
+```{r impute_hiv}
+# Calculate India HIV odds from data
+CalculateOddsIndia <- function (x) sum(x$hiv * x$n) / sum((1-x$hiv) * x$n)
+
+CalculateOddsIndia(final.agg %>%  filter(survey == code_earliest))
+
+# Calculate odds ratio for UNAIDS versus DHS (approximate) odds
+OR_latest   <- 46087/(116176000-46087) / CalculateOddsIndia(final.agg %>%  filter(survey == code_latest))
+OR_earliest <- 53403/(119369000-53403) / CalculateOddsIndia(final.agg %>%  filter(survey == code_earliest))
+
+# Correct proportion HIVs based on UNAIDS to imputed odds ratio 
+# Cdds raito for all of India HIV to UNAIDS HIV
+# Applies this to reduce proportion with HIV
+
+
+LogOdds <- function(x) log(x/(1+x))
+Prob <- function(x) exp( x/(1-x) )
+  
+CorrectHIV <- function(x, OR) {
+  ## Convert proportion to log-odds
+  x[] <- qlogis(x)
+  ## Calculate new log-odds of being in HIV group
+  x[,65:128] <- x[,65:128] + log(OR)
+  ## Calculate new odds of being in non HIV group
+  x[,1:64]   <- x[,1:64]   - log(OR)
+  ## Convert odds back to proportion
+  x[] <- plogis(x)
+  ## Return result
+  x
+}
+
+# Note `0` is all of India
+100*sum(res_states_dhs_earliest$`0`[, 65:128]) /  sum(res_states_dhs_earliest$`0`[,])
+100*sum(res_states_dhs_latest$`0`[, 65:128]) /  sum(res_states_dhs_latest$`0`[,])
+
+# Impute HIV for dhs_earliest
+res_states_dhs_earliest <- map(res_states_dhs_earliest, CorrectHIV, OR = OR_earliest)
+res_states_dhs_latest <- map(res_states_dhs_latest, CorrectHIV, OR = OR_latest)
+
+100*sum(res_states_dhs_earliest$`0`[, 65:128]) /  sum(res_states_dhs_earliest$`0`[,])
+100*sum(res_states_dhs_latest$`0`[, 65:128]) /  sum(res_states_dhs_latest$`0`[,])
+
+```
+
+
+# Save dirlechts
+```{r save_dirlechts}
+saveRDS(res_states_dhs_earliest, file = "India/dirlecht_dhs_earliest.Rds")
+saveRDS(res_states_dhs_latest, file = "India/dirlecht_dhs_latest.Rds")
+saveRDS(state_complete, file = "India/dirlecht_risk_factor_order.Rds")
+
+```
+
+
+
